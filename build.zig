@@ -9,7 +9,7 @@ const Pack = struct {
     zjb_art: *Build.Step.Run,
 
     fn init(b: *Build, comptime zjb_bridge_name: []const u8) Pack {
-        const step = b.step("pack", "Accumulate static assets");
+        const step = b.step("pack", "Accumulate web assets");
         // configure zjb
         const zjb = b.dependency("zjb", .{});
         const zjb_art = b.addRunArtifact(zjb.artifact("generate_js"));
@@ -69,9 +69,10 @@ pub fn build(b: *Build) void {
     b.default_step = pack.step;
     // generates a WASM executable named 'core'
     pack.add_exe(b, "core", b.path("src/main.zig"));
-    // contains site root and assets
-    pack.add_dir(b, b.path("static"));
-
+    // contains site root and scripts
+    pack.add_dir(b, b.path("web"));
+    // add asset folder to output
+    pack.add_dir(b, b.path("assets"));
     // only fails when stderr is unwritable
     // error can be safely ignored
     const host = build_host(b, &[_]([]const u8){ "python", "python3" });
