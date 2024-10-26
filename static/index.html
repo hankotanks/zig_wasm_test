@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+	<head>
+		<title>zig_wasm_test</title>
+        <link rel="shortcut icon" href="#" />
+	</head>
+	<body>
+		<script src="bridge.js"></script>
+		<script>
+            const init = async _ => {
+			    const zjb = new Zjb();
+
+                const params = {
+                    env: {
+				        memory: new WebAssembly.Memory({ initial: 1 }),
+				        __stack_pointer: 0,
+			        },
+                    zjb: zjb.imports,
+                };
+
+                const module = await WebAssembly.instantiateStreaming(fetch("core.wasm"), params);
+
+                zjb.setInstance(module.instance);
+                module.instance.exports.main();
+            };
+
+            init();
+		</script>
+	</body>
+</html>
