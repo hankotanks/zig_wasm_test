@@ -1,6 +1,7 @@
 .{
     .name = "zig_wasm_test",
     .version = "0.0.0",
+    .minimum_zig_version = "0.13.0",
     .dependencies = .{
         .zjb = .{
             .url = "git+https://github.com/scottredig/zig-javascript-bridge#84b408d1c3910a1ca24e2e6208566ad71eff3ac8",
@@ -11,6 +12,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
-        "static",
+        "web",
+        "assets",
     },
 }

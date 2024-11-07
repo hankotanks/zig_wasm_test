@@ -1,14 +1,17 @@
 const std = @import("std");
 const io = std.io;
+const ArrayList = std.ArrayList;
+const fs = std.fs;
 const Level = std.log.Level;
 const Build = std.Build;
 
 const Pack = struct {
     step: *Build.Step,
+    manifest: *Build.Step.Options,
     zjb: *Build.Dependency,
     zjb_art: *Build.Step.Run,
 
-    fn init(b: *Build, comptime zjb_bridge_name: []const u8) Pack {
+    fn init(b: *Build, comptime zjb_bridge_name: []const u8) @This() {
         const step = b.step("pack", "Accumulate web assets");
         // configure zjb
         const zjb = b.dependency("zjb", .{});
@@ -19,10 +22,15 @@ const Pack = struct {
         const bridge = b.addInstallFileWithDir(zjb_out, Build.InstallDir.bin, zjb_bridge_name);
         step.dependOn(&bridge.step);
         // return `Pack` object
-        return .{ .step = step, .zjb = zjb, .zjb_art = zjb_art };
+        return .{
+            .step = step,
+            .manifest = b.addOptions(),
+            .zjb = zjb,
+            .zjb_art = zjb_art,
+        };
     }
 
-    fn add_dir(self: *const Pack, b: *Build, path: Build.LazyPath) void {
+    fn include(self: *const @This(), b: *Build, path: Build.LazyPath) void {
         const dir = b.addInstallDirectory(.{
             .source_dir = path,
             .install_dir = Build.InstallDir.bin,
@@ -31,11 +39,51 @@ const Pack = struct {
         self.step.dependOn(&dir.step);
     }
 
-    fn add_exe(
-        self: *const Pack,
+    // this function can fail, but always creates a manifest entry with 'name'
+    fn includeWithManifest(
+        self: *const @This(),
         b: *Build,
         comptime name: []const u8,
         path: Build.LazyPath,
+    ) !void {
+        var files = ArrayList([]const u8).init(b.allocator);
+        defer files.deinit();
+        // on failure, insert an empty manifest entry with this name
+        errdefer self.manifest.addOption([]const []const u8, name, &[_][]const u8{});
+        // open the asset directory
+        var dir = try fs.cwd().openDir(name, .{ .iterate = true });
+        defer dir.close();
+        // create walker from IterableDir
+        var walker = try dir.walk(b.allocator);
+        defer walker.deinit();
+        // recursively step through assets dir
+        while (try walker.next()) |entry| {
+            // only log files
+            if (entry.kind != .file) {
+                continue;
+            }
+            // replace backslashes (paths are web are '/' delimited)
+            var entry_path = b.dupe(entry.path);
+            for (0..entry_path.len) |i| {
+                if (entry_path[i] == '\\') {
+                    entry_path[i] = '/';
+                }
+            }
+            // append path
+            try files.append(entry_path);
+        }
+        // add to manifest
+        self.manifest.addOption([]const []const u8, name, files.items);
+        // add directory
+        self.include(b, path);
+    }
+
+    fn addExecutable(
+        self: *const @This(),
+        b: *Build,
+        comptime name: []const u8,
+        path: Build.LazyPath,
+        should_include_manifest: bool,
     ) void {
         // define target architecture
         const target = .{
@@ -52,6 +100,12 @@ const Pack = struct {
         exe.entry = .disabled;
         exe.rdynamic = true;
         exe.root_module.addImport("zjb", self.zjb.module("zjb"));
+        // expose manifest to executable if requested
+        if (should_include_manifest) {
+            // self.manifest.addOptionPath("manifest", exe.getEmittedBin());
+            exe.root_module.addOptions("manifest", self.manifest);
+            // b.createModule(.{}).addOptions("manifest", self.manifest);
+        }
         // expose JS bindings to executable
         self.zjb_art.addArtifactArg(exe);
         // add dependency to 'pack' step
@@ -68,49 +122,37 @@ pub fn build(b: *Build) void {
     // if `zig build` is called, the 'pack' step is executed
     b.default_step = pack.step;
     // generates a WASM executable named 'core'
-    pack.add_exe(b, "core", b.path("src/main.zig"));
+    pack.addExecutable(b, "core", b.path("src/main.zig"), true);
     // contains site root and scripts
-    pack.add_dir(b, b.path("web"));
-    // add asset folder to output
-    pack.add_dir(b, b.path("assets"));
-    // only fails when stderr is unwritable
-    // error can be safely ignored
-    const host = build_host(b, &[_]([]const u8){ "python", "python3" });
-    host.dependOn(pack.step);
+    pack.include(b, b.path("web"));
+    // add asset folder to output and build a manifest of its contents
+    pack.includeWithManifest(b, "assets", b.path("assets")) catch {};
+    // add 'host' step if it can be generated
+    const host = buildHost(b, &[_]([]const u8){ "python", "python3" }) catch return;
+    host.dependOn(b.default_step);
 }
 
-// always returns
-fn build_host(
+fn buildHost(
     b: *Build,
     comptime py_path_entries: []const []const u8,
-) *Build.Step {
-    // handle failed 'host' composition
-    if (build_host_inner(b, py_path_entries)) |host| {
-        return host;
-    } else |err| {
+) !*Build.Step {
+    // prepare for failure if python isn't in PATH
+    errdefer |err| {
         const writer = io.getStdErr().writer();
         // log the actual error
         writer.print("Configuration of 'host' step failed:\n\t{}\n", .{err}) catch {};
-        // log python binary name options
         writer.print("PATH must contain at least one of [", .{}) catch {};
+        // log possible python PATH names
         var idx: usize = 0;
         for (py_path_entries) |item| {
-            writer.print("'{s}'", .{item}) catch {};
+            writer.print("{s}", .{item}) catch {};
             idx += 1;
             if (idx < py_path_entries.len) {
                 writer.print(", ", .{}) catch {};
             }
         }
-        writer.print("].", .{}) catch {};
-        // make a dummy 'host' step and return
-        return b.step("host", "Python must be installed to serve the project");
+        writer.print("].\n", .{}) catch {};
     }
-}
-
-fn build_host_inner(
-    b: *Build,
-    comptime py_path_entries: []const []const u8,
-) !*Build.Step {
     // ensure python is in PATH
     const py_path = try b.findProgram(py_path_entries, &.{""});
     // configure `host` build step

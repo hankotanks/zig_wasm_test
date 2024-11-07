@@ -21,3 +21,18 @@ canvas {
 .overlay {
     z-index: 1;
 }
+
+#features {
+    width: 100vw;
+    display: flex;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+#features button {
+    border: none;
+    background: none;
+    margin: 2px;
+    white-space: nowrap;
+    cursor: pointer;
+}
