@@ -37,14 +37,12 @@ comptime {
     zjb.exportFn("getLayers", getLayers);
 }
 
-inline fn parseLayer(offset: i32, count: i32) !geom.FeatureLayer {
+inline fn parseLayer(offset: i32, count: i32) !json.Parsed(geom.FeatureLayer) {
     // get slice containing JSON
     const layer = sliceArrayBuffer(u8, offset, count);
     defer alloc.free(layer);
     // attempt to parse
-    const parsed = try json.parseFromSlice(geom.FeatureLayer, alloc, layer, .{});
-    // on success, return the parsed FeatureLayer
-    return parsed.value;
+    return json.parseFromSlice(geom.FeatureLayer, alloc, layer, .{});
 }
 
 fn renderLayerInner(
@@ -57,8 +55,9 @@ fn renderLayerInner(
     defer ctx.release();
     // try to parse the layer
     const layer = try parseLayer(offset, count);
+    defer layer.deinit();
     // for each polygon in the layer, render
-    for (layer.features) |feature| {
+    for (layer.value.features) |feature| {
         for (feature.coordinates) |poly| {
             geom.renderPolygon(ctx, poly, canvas_width, canvas_height);
         }
@@ -71,7 +70,7 @@ export fn renderLayer(
     count: i32,
     canvas_width: f32,
     canvas_height: f32,
-) i32 {
+) callconv(.C) i32 {
     // execute failable render
     renderLayerInner(
         ctx,
